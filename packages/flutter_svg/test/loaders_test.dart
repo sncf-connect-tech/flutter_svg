@@ -76,9 +76,8 @@ class TestLoader extends SvgLoader<void> {
   final String keyName;
 
   @override
-  String provideSvg(void message) {
-    return '<svg width="10" height="10"></svg>';
-  }
+  Future<String> provideSvg(void message) =>
+      Future<String>.value('<svg width="10" height="10"></svg>');
 
   @override
   SvgCacheKey cacheKey(BuildContext? context) {
