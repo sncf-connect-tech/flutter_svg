@@ -8,7 +8,7 @@ import 'package:vector_graphics/vector_graphics.dart';
 import 'package:vector_graphics_compiler/vector_graphics_compiler.dart' as vg;
 
 import '../svg.dart' show svg;
-import 'utilities/compute.dart';
+import 'utilities/compute.dart' as isolate;
 import 'utilities/file.dart';
 
 /// A theme used when decoding an SVG picture.
@@ -123,7 +123,7 @@ abstract class SvgLoader<T> extends BytesLoader {
 
   /// Will be called in [compute] with the result of [prepareMessage].
   @protected
-  String provideSvg(T? message);
+  Future<String> provideSvg(T? message);
 
   /// Will be called
   @protected
@@ -132,23 +132,40 @@ abstract class SvgLoader<T> extends BytesLoader {
 
   Future<ByteData> _load(BuildContext? context) {
     return prepareMessage(context).then((T? message) {
-      return compute((T? message) {
-        return vg
-            .encodeSvg(
-              xml: provideSvg(message),
+      return provideSvg(message).then(
+        (String messageSvg) => compute<_ComputeIsolateArgs, ByteData>(
+            _compute,
+            _ComputeIsolateArgs(
+              message: messageSvg,
               theme: theme.toVgTheme(),
               colorMapper: colorMapper == null
                   ? null
                   : _DelegateVgColorMapper(colorMapper!),
-              debugName: 'Svg loader',
-              enableClippingOptimizer: false,
-              enableMaskingOptimizer: false,
-              enableOverdrawOptimizer: false,
-            )
-            .buffer
-            .asByteData();
-      }, message, debugLabel: 'Load Bytes');
+            ),
+            debugLabel: 'Load Bytes'),
+      );
     });
+  }
+
+  /// A compute implementation that does not spawn isolates in tests.
+  @protected
+  Future<R> compute<Q, R>(ComputeCallback<Q, R> callback, Q message,
+          {String? debugLabel}) =>
+      isolate.compute<Q, R>(callback, message, debugLabel: debugLabel);
+
+  static ByteData _compute(_ComputeIsolateArgs args) {
+    return vg
+        .encodeSvg(
+          xml: args.message,
+          theme: args.theme,
+          colorMapper: args.colorMapper,
+          debugName: 'Svg loader',
+          enableClippingOptimizer: false,
+          enableMaskingOptimizer: false,
+          enableOverdrawOptimizer: false,
+        )
+        .buffer
+        .asByteData();
   }
 
   /// This method intentionally avoids using `await` to avoid unnecessary event
@@ -162,6 +179,19 @@ abstract class SvgLoader<T> extends BytesLoader {
   SvgCacheKey cacheKey(BuildContext? context) {
     return SvgCacheKey(keyData: this, theme: theme, colorMapper: colorMapper);
   }
+}
+
+/// Arguments for isolate
+class _ComputeIsolateArgs {
+  _ComputeIsolateArgs({
+    required this.message,
+    required this.theme,
+    required this.colorMapper,
+  });
+
+  final String message;
+  final vg.SvgTheme theme;
+  final vg.ColorMapper? colorMapper;
 }
 
 /// A [SvgTheme] aware cache key.
@@ -213,9 +243,7 @@ class SvgStringLoader extends SvgLoader<void> {
   final String _svg;
 
   @override
-  String provideSvg(void message) {
-    return _svg;
-  }
+  Future<String> provideSvg(void message) async => _svg;
 
   @override
   int get hashCode => Object.hash(svg, theme, colorMapper);
@@ -244,7 +272,8 @@ class SvgBytesLoader extends SvgLoader<void> {
   final Uint8List bytes;
 
   @override
-  String provideSvg(void message) => utf8.decode(bytes, allowMalformed: true);
+  Future<String> provideSvg(void message) => compute(
+      (Uint8List bytes) => utf8.decode(bytes, allowMalformed: true), bytes);
 
   @override
   int get hashCode => Object.hash(svg, theme, colorMapper);
@@ -272,10 +301,7 @@ class SvgFileLoader extends SvgLoader<void> {
   final File file;
 
   @override
-  String provideSvg(void message) {
-    final Uint8List bytes = file.readAsBytesSync();
-    return utf8.decode(bytes, allowMalformed: true);
-  }
+  Future<String> provideSvg(void message) => file.readAsString();
 
   @override
   int get hashCode => Object.hash(file, theme, colorMapper);
@@ -360,8 +386,10 @@ class SvgAssetLoader extends SvgLoader<ByteData> {
   }
 
   @override
-  String provideSvg(ByteData? message) =>
-      utf8.decode(message!.buffer.asUint8List(), allowMalformed: true);
+  Future<String> provideSvg(ByteData? message) => compute(
+      (ByteData? message) =>
+          utf8.decode(message!.buffer.asUint8List(), allowMalformed: true),
+      message);
 
   @override
   SvgCacheKey cacheKey(BuildContext? context) {
@@ -417,8 +445,10 @@ class SvgNetworkLoader extends SvgLoader<Uint8List> {
   }
 
   @override
-  String provideSvg(Uint8List? message) =>
-      utf8.decode(message!, allowMalformed: true);
+  Future<String> provideSvg(Uint8List? message) => compute(
+        (Uint8List? message) => utf8.decode(message!, allowMalformed: true),
+        message,
+      );
 
   @override
   int get hashCode => Object.hash(url, headers, theme, colorMapper);
